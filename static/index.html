@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>自动文献收集工作流</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; margin: 24px; color: #222; }
+      .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; margin-top: 16px; }
+      input, button { padding: 8px 10px; margin-right: 8px; }
+      button { cursor: pointer; }
+      .method { background: #f5f7ff; border-left: 3px solid #7b8cff; padding: 8px; margin: 6px 0; }
+      .muted { color: #666; }
+    </style>
+  </head>
+  <body>
+    <h1>自动文献收集与方法解析</h1>
+    <p class="muted">输入期刊 ISSN + 关键词，从 Crossref 抓取近期论文并提取方法相关句子。</p>
+
+    <div class="card">
+      <label>ISSN：<input id="issn" value="1476-4687" /></label>
+      <label>关键词：<input id="query" value="machine learning" /></label>
+      <label>数量：<input id="rows" type="number" value="5" min="1" max="50" /></label>
+      <button id="crawl">抓取并解析</button>
+      <button id="refresh">刷新本地库</button>
+      <p id="status" class="muted"></p>
+    </div>
+
+    <div id="list"></div>
+
+    <script>
+      const statusEl = document.getElementById('status');
+      const listEl = document.getElementById('list');
+
+      function paperCard(p) {
+        const methods = (p.methods || []).map(m => `<div class="method">${m}</div>`).join('');
+        return `
+          <div class="card">
+            <h3>${p.title || '无标题'}</h3>
+            <div class="muted">${p.journal || ''} | ${p.published || '未知日期'} | DOI: ${p.doi || ''}</div>
+            <p>${p.abstract || '无摘要'}</p>
+            <h4>方法提取</h4>
+            ${methods || '<div class="muted">暂无可提取方法句子</div>'}
+            <a href="${p.url}" target="_blank">查看原文链接</a>
+          </div>
+        `;
+      }
+
+      async function loadPapers() {
+        const res = await fetch('/api/papers');
+        const data = await res.json();
+        listEl.innerHTML = data.map(paperCard).join('');
+      }
+
+      document.getElementById('crawl').addEventListener('click', async () => {
+        const body = {
+          issn: document.getElementById('issn').value,
+          query: document.getElementById('query').value,
+          rows: Number(document.getElementById('rows').value),
+        };
+        statusEl.textContent = '抓取中...';
+        const res = await fetch('/api/crawl', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        statusEl.textContent = `完成，保存 ${data.saved || 0} 篇`;
+        await loadPapers();
+      });
+
+      document.getElementById('refresh').addEventListener('click', loadPapers);
+      loadPapers();
+    </script>
+  </body>
+</html>
