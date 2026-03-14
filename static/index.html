@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>自动文献收集工作流</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; margin: 24px; color: #222; }
+      .card { border: 1px solid #ddd; border-radius: 10px; padding: 16px; margin-top: 16px; }
+      input, button { padding: 8px 10px; margin-right: 8px; }
+      button { cursor: pointer; }
+      .method { background: #f5f7ff; border-left: 3px solid #7b8cff; padding: 8px; margin: 6px 0; }
+      .muted { color: #666; }
+      .row { margin-top: 10px; }
+      textarea { width: 100%; min-height: 88px; }
+      .llm-box { background: #fafafa; padding: 10px; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>自动文献收集与总结（Crossref + PubMed + LLM）</h1>
+    <p class="muted">只需输入关键词；可选接入 DeepSeek/OpenAI 兼容模型进行更高质量总结与学习要点提炼。</p>
+
+    <div class="card">
+      <div class="row">
+        <label>关键词：<input id="query" value="machine learning in medical imaging" size="40" /></label>
+        <label>数量：<input id="rows" type="number" value="5" min="1" max="50" /></label>
+      </div>
+      <div class="row">
+        <label><input id="crossref" type="checkbox" checked /> Crossref</label>
+        <label><input id="pubmed" type="checkbox" checked /> PubMed</label>
+      </div>
+
+      <div class="row llm-box">
+        <label><input id="llmEnabled" type="checkbox" /> 启用大模型总结</label>
+        <div class="row">
+          <label>Provider：<input id="llmProvider" value="deepseek" /></label>
+          <label>Model：<input id="llmModel" value="deepseek-chat" /></label>
+        </div>
+        <div class="row">
+          <label>Base URL：<input id="llmBaseUrl" value="https://api.deepseek.com" size="36" /></label>
+          <label>Timeout：<input id="llmTimeout" type="number" value="30" min="5" max="120" /></label>
+        </div>
+        <div class="row">
+          <label>API Key：<input id="llmApiKey" type="password" placeholder="sk-... (仅本次请求使用，不存储)" size="48" /></label>
+        </div>
+      </div>
+
+      <div class="row">
+        <button id="crawl">抓取并总结</button>
+        <button id="refresh">刷新本地库</button>
+      </div>
+      <p id="status" class="muted"></p>
+    </div>
+
+    <div class="card">
+      <h3>导出到 Obsidian</h3>
+      <div class="row">
+        <label>Vault 路径（可选）：<input id="vaultPath" placeholder="例如 /Users/you/Documents/MyVault" size="42" /></label>
+      </div>
+      <div class="row">
+        <label>子目录：<input id="folder" value="Literature" /></label>
+        <label>导出篇数：<input id="limit" type="number" value="20" min="1" max="100" /></label>
+      </div>
+      <div class="row">
+        <button id="export">导出 Markdown</button>
+      </div>
+      <textarea id="exportResult" readonly></textarea>
+    </div>
+
+    <div id="list"></div>
+
+    <script>
+      const statusEl = document.getElementById('status');
+      const listEl = document.getElementById('list');
+
+      function paperCard(p) {
+        const methods = (p.methods || []).map(m => `<div class="method">${m}</div>`).join('');
+        return `
+          <div class="card">
+            <h3>${p.title || '无标题'}</h3>
+            <div class="muted">来源: ${p.source || ''} | ${p.journal || ''} | ${p.published || '未知日期'} | DOI: ${p.doi || ''}</div>
+            <p><strong>总结：</strong>${p.summary || '暂无'}</p>
+            <h4>方法提取</h4>
+            ${methods || '<div class="muted">暂无可提取方法句子</div>'}
+            <details>
+              <summary>查看摘要</summary>
+              <p>${p.abstract || '无摘要'}</p>
+            </details>
+            <a href="${p.url}" target="_blank">查看原文链接</a>
+          </div>
+        `;
+      }
+
+      async function loadPapers() {
+        const res = await fetch('/api/papers');
+        const data = await res.json();
+        listEl.innerHTML = data.map(paperCard).join('');
+      }
+
+      document.getElementById('crawl').addEventListener('click', async () => {
+        const sources = [];
+        if (document.getElementById('crossref').checked) sources.push('crossref');
+        if (document.getElementById('pubmed').checked) sources.push('pubmed');
+
+        const llmEnabled = document.getElementById('llmEnabled').checked;
+        const body = {
+          query: document.getElementById('query').value,
+          rows: Number(document.getElementById('rows').value),
+          sources,
+          llm: {
+            enabled: llmEnabled,
+            provider: document.getElementById('llmProvider').value,
+            api_key: document.getElementById('llmApiKey').value || null,
+            base_url: document.getElementById('llmBaseUrl').value,
+            model: document.getElementById('llmModel').value,
+            timeout_seconds: Number(document.getElementById('llmTimeout').value),
+          },
+        };
+
+        statusEl.textContent = '抓取中...';
+        const res = await fetch('/api/crawl', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        statusEl.textContent = `完成，保存 ${data.saved || 0} 篇；LLM: ${data.llm_enabled ? '已启用' : '未启用'}；错误：${(data.errors || []).join(' | ') || '无'}`;
+        await loadPapers();
+      });
+
+      document.getElementById('refresh').addEventListener('click', loadPapers);
+
+      document.getElementById('export').addEventListener('click', async () => {
+        const body = {
+          vault_path: document.getElementById('vaultPath').value || null,
+          folder: document.getElementById('folder').value,
+          limit: Number(document.getElementById('limit').value),
+        };
+        const res = await fetch('/api/export/obsidian', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        document.getElementById('exportResult').value =
+          `已导出 ${data.exported} 篇\n目录: ${data.directory}\n` + (data.files || []).join('\n');
+      });
+
+      loadPapers();
+    </script>
+  </body>
+</html>
